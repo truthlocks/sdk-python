@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://truthlocks.com">
-    <img src="https://truthlocks.com/logo.svg" alt="Truthlocks" width="200" />
+    <img src="https://www.truthlocks.com/logo/logo-color-1.png" alt="Truthlocks" width="200" />
   </a>
 </p>
 
