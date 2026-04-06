@@ -78,3 +78,82 @@ class ProofBundle:
     proofs: list[dict[str, Any]] = field(default_factory=list)
     issuer_certificate: dict[str, Any] = field(default_factory=dict)
     bundle_signature: dict[str, Any] = field(default_factory=dict)
+
+
+# ============================================================================
+# Receipt Types (Ticket 81: Receipt Canonical Event Schema v2)
+# ============================================================================
+
+
+class ReceiptStatus(str, Enum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    SUPERSEDED = "superseded"
+
+
+class RetentionPolicy(str, Enum):
+    STANDARD = "standard"
+    EXTENDED = "extended"
+    PERMANENT = "permanent"
+
+
+@dataclass
+class ReceiptSignature:
+    alg: str
+    kid: str
+    value: str
+
+
+@dataclass
+class ReceiptLog:
+    log_id: str
+    leaf_index: int
+    leaf_hash: str
+
+
+@dataclass
+class ReceiptEvent:
+    receipt_id: str
+    receipt_type: str
+    receipt_version: str
+    status: str
+    issued_at: str
+    tenant_id: str
+    issuer_id: str
+    payload_hash: str
+    signature: dict[str, Any] = field(default_factory=dict)
+    log: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ReceiptType:
+    id: str
+    name: str
+    display_name: str
+    version: str
+    status: str
+    schema: dict[str, Any] = field(default_factory=dict)
+    description: str | None = None
+    created_at: str | None = None
+
+
+@dataclass
+class MintReceiptRequest:
+    issuer_id: str
+    kid: str
+    alg: str
+    receipt_type: str
+    subject: str
+    payload: dict[str, Any]
+    receipt_version: str = "1.0.0"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    retention_policy: str = RetentionPolicy.STANDARD
+
+
+@dataclass
+class ListReceiptsFilter:
+    receipt_type: str | None = None
+    issuer_id: str | None = None
+    status: str | None = None
+    limit: int = 20
+    offset: int = 0

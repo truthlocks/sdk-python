@@ -15,7 +15,10 @@ from .errors import (
     TruthlockError,
     ValidationError,
 )
-from .models import Attestation, Issuer, IssuerKey, ProofBundle, VerifyResult, Verdict
+from .models import (
+    Attestation, Issuer, IssuerKey, ProofBundle, VerifyResult, Verdict,
+    ReceiptEvent, ReceiptType, MintReceiptRequest, ListReceiptsFilter,
+)
 
 
 class TruthlockClient:
@@ -61,6 +64,7 @@ class TruthlockClient:
         self.keys = _KeysResource(self)
         self.attestations = _AttestationsResource(self)
         self.verify = _VerifyResource(self)
+        self.receipts = _ReceiptsResource(self)
 
     def _build_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {
@@ -311,4 +315,122 @@ class _VerifyResource:
             issuer_id=resp.get("issuer_id"),
             issued_at=resp.get("issued_at"),
             details=resp.get("details", {}),
+        )
+
+
+class _ReceiptsResource:
+    """Receipt lifecycle operations (Ticket 81: Receipt Canonical Event Schema v2)."""
+
+    def __init__(self, client: TruthlockClient):
+        self._client = client
+
+    def mint(self, req: MintReceiptRequest, idempotency_key: str | None = None) -> ReceiptEvent:
+        """Mint a cryptographically signed, transparency-log-anchored receipt."""
+        import dataclasses
+        data = dataclasses.asdict(req)
+        headers: dict[str, str] = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        resp = self._client._request("POST", "/v1/receipts", json=data, idempotent=True)
+        return self._parse_receipt(resp)
+
+    def get(self, receipt_id: str) -> ReceiptEvent:
+        """Retrieve a receipt event by ID."""
+        resp = self._client._request("GET", f"/v1/receipts/{receipt_id}")
+        return self._parse_receipt(resp)
+
+    def list(self, f: ListReceiptsFilter | None = None) -> list[ReceiptEvent]:
+        """List receipt events with optional filters."""
+        params: dict[str, Any] = {}
+        if f:
+            if f.receipt_type:
+                params["receipt_type"] = f.receipt_type
+            if f.issuer_id:
+                params["issuer_id"] = f.issuer_id
+            if f.status:
+                params["status"] = f.status
+            params["limit"] = f.limit
+            params["offset"] = f.offset
+        resp = self._client._request("GET", "/v1/receipts", params=params)
+        items = resp.get("items", []) if isinstance(resp, dict) else resp
+        return [self._parse_receipt(r) for r in items]
+
+    def revoke(self, receipt_id: str, reason: str = "") -> ReceiptEvent:
+        """Revoke a receipt event."""
+        resp = self._client._request(
+            "POST",
+            f"/v1/receipts/{receipt_id}/revoke",
+            json={"reason": reason} if reason else {},
+            idempotent=True,
+        )
+        return self._parse_receipt(resp)
+
+    def list_types(self) -> list[ReceiptType]:
+        """List all active receipt type families."""
+        resp = self._client._request("GET", "/v1/receipt-types")
+        items = resp.get("items", []) if isinstance(resp, dict) else resp
+        return [
+            ReceiptType(
+                id=rt["id"],
+                name=rt["name"],
+                display_name=rt.get("display_name", rt["name"]),
+                version=rt.get("version", "1.0.0"),
+                status=rt.get("status", "active"),
+                schema=rt.get("schema", {}),
+                description=rt.get("description"),
+                created_at=rt.get("created_at"),
+            )
+            for rt in items
+        ]
+
+    def get_type(self, name: str) -> ReceiptType:
+        """Get a specific receipt type. Use 'name@version' to pin a version."""
+        resp = self._client._request("GET", f"/v1/receipt-types/{name}")
+        return ReceiptType(
+            id=resp["id"],
+            name=resp["name"],
+            display_name=resp.get("display_name", resp["name"]),
+            version=resp.get("version", "1.0.0"),
+            status=resp.get("status", "active"),
+            schema=resp.get("schema", {}),
+            description=resp.get("description"),
+            created_at=resp.get("created_at"),
+        )
+
+    def get_proof_bundle(self, receipt_id: str) -> dict[str, Any]:
+        """Get the proof bundle for offline verification."""
+        return self._client._request("GET", f"/v1/receipts/{receipt_id}/proof-bundle")
+
+    def verify(self, receipt_id: str) -> dict[str, Any]:
+        """Verify a receipt. Returns verdict: VALID|REVOKED|INVALID_SIGNATURE|KEY_COMPROMISED|NOT_FOUND"""
+        return self._client._request("POST", "/v1/receipts/verify", json={"receipt_id": receipt_id})
+
+    def search(self, **kwargs: Any) -> dict[str, Any]:
+        """Search receipts. Pass q=, receipt_type=, status=, from_date=, to_date=, limit=, offset=."""
+        return self._client._request("POST", "/v1/receipts/search", json=kwargs)
+
+    def export(self, format: str = "json", filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Queue a bulk export. Returns immediately; poll get_export() for download_url."""
+        return self._client._request("POST", "/v1/receipts/export", json={"format": format, "filters": filters or {}}, idempotent=True)
+
+    def get_export(self, export_id: str) -> dict[str, Any]:
+        """Get status and download_url of an export job."""
+        return self._client._request("GET", f"/v1/receipts/exports/{export_id}")
+
+    def redact(self, receipt_id: str) -> dict[str, Any]:
+        """Permanently redact a receipt payload. Cryptographic proof is preserved."""
+        return self._client._request("POST", f"/v1/receipts/{receipt_id}/redact", json={}, idempotent=True)
+
+    def _parse_receipt(self, resp: dict[str, Any]) -> ReceiptEvent:
+        return ReceiptEvent(
+            receipt_id=resp["receipt_id"],
+            receipt_type=resp["receipt_type"],
+            receipt_version=resp.get("receipt_version", "1.0.0"),
+            status=resp.get("status", "active"),
+            issued_at=resp.get("issued_at", ""),
+            tenant_id=resp.get("tenant_id", ""),
+            issuer_id=resp.get("issuer_id", ""),
+            payload_hash=resp.get("payload_hash", ""),
+            signature=resp.get("signature", {}),
+            log=resp.get("log", {}),
         )
